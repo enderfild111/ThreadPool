@@ -45,7 +45,7 @@ public:
 			return pd->data_;
 		}
 		else {
-			throw "type is incompatiable!"//抛出异常
+			throw "type is incompatiable!";//抛出异常
 		}
 	}
 private:
@@ -69,8 +69,47 @@ private:
 	std::unique_ptr<Base> base_;
 };
 
+//实现一个信号量类
+class Semaphore {
+public:
+	Semaphore(int limit = 0)
+		:resLimit_(limit)
+	{ }
+	~Semaphore() = default;
+	//获取一个信号量资源
+	void wait() {
+		std::unique_lock<std::mutex> lock(mtx_);
+		cond_.wait(lock, [&]() {return resLimit_ > 0; });
+		resLimit_--;
+	}
+	//增加一个信号量资源
+	void post() {
+		std::unique_lock<std::mutex> lock(mtx_);
+		resLimit_++;
+		cond_.notify_all ();
+	}
+private:
+	std::size_t resLimit_;//资源计数
+	std::mutex mtx_;
+	std::condition_variable cond_;
+};
 
-
+class Task;//前置声明
+//Result类，接受提交到线程池的task结束后的返回值
+class Result {
+public:
+	Result(std::shared_ptr<Task> task, bool isValid = true);
+	~Result() = default;
+	//setVal方法,如何实现? 获取返回值
+	void setVal(Any any);
+	//get方法，用户调用该函数获取返回值
+	Any get();
+private:
+	Any any_;//存储返回值
+	Semaphore sem_;//线程通信信号量
+	std::shared_ptr<Task> task_;//指向对应的获取返回值的任务对象
+	std::atomic_bool isValid_;//任务是否有效
+};
 //线程池模式
 enum class PoolMode {
 	MODE_FIXED,
@@ -93,7 +132,14 @@ private:
 //重写run方法
 class Task {
 public:
+	Task();
+	~Task() = default;
 	virtual Any run() = 0;
+	void exec();
+	void setResult(Result* res);
+private:
+	//如果使用强智能指针，会导致强智能指针的交叉引用
+	Result* result_;//指向对应的结果对象
 };
 
 
@@ -124,7 +170,7 @@ public:
 	//设置线程池任务队列最大阈值
 	void setTaskQueMaxThreshHold(size_t maxThreshHold);
 	//向线程池提交任务
-	void submitTask(std::shared_ptr<Task>sp);
+	Result submitTask(std::shared_ptr<Task>sp);
 
 	ThreadPool(const ThreadPool&) = delete;
 	ThreadPool& operator=(const ThreadPool&) = delete;

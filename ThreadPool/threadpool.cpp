@@ -1,5 +1,8 @@
 #include "threadpool.h"
 
+
+
+////////////////////////////////////////////////////////////////
 const int TASK_MAX_THRESHOLD = 1024;
 
 ThreadPool::ThreadPool()
@@ -21,7 +24,7 @@ void ThreadPool::setTaskQueMaxThreshHold(size_t maxThreshHold) {
 
 }
 
-void ThreadPool::submitTask(std::shared_ptr<Task>sp) {
+Result ThreadPool::submitTask(std::shared_ptr<Task>sp) {
 	//获取互斥锁
 	std::unique_lock<std::mutex>lock(taskQueMtx_);
 	//线程通信，如果任务队列满,等待1秒，如果超时
@@ -30,7 +33,8 @@ void ThreadPool::submitTask(std::shared_ptr<Task>sp) {
 	//wait_unitl 等待指定条件成立，超时则返回false，否则返回true
 	if (!notFull_.wait_for(lock, std::chrono::seconds(1), [&]()->bool { return taskSize_ < taskQueMaxThreshHold_; })) 
 	{
-		throw std::runtime_error("task queue is full");
+		std::cerr << "task queue is full, wait for 1 second,submit task failed" << std::endl;
+		return Result(sp,false);
 	}
 	else {
 		//将任务放入任务队列
@@ -39,6 +43,12 @@ void ThreadPool::submitTask(std::shared_ptr<Task>sp) {
 	}
 	//通知线程池有任务需要处理，因为放了新任务，队列肯定不为空，所以在notEmpty条件变量上通知
 	notEmpty_.notify_all();
+
+	//返回任务Result对象
+	//return sp->getResult();是不行的，
+	// 因为线程池里的任务结束后，才能返回结果，但是任务结束后，Task已经析构了，不能再使用了！
+	// 依赖于Task的生命周期的Result对象也就没了
+	return Result(sp);
 }
 
 void ThreadPool::start(size_t initThreadSize) {
@@ -76,7 +86,8 @@ void ThreadPool::ThreadFunc() {
 		//出作用域，释放锁
 		if (task) {
 			//执行任务
-			task->run();
+			task->exec();
+			//把任务的返回值通过setVal方法设置到Result对象中
 		}
 	}
 }
@@ -85,6 +96,7 @@ void ThreadPool::ThreadFunc() {
 
 
 
+////////////////////////////////////////////////////////////////
 //构造
 Thread::Thread(ThreadFunc func)
 	:func_(func)
@@ -102,4 +114,49 @@ void Thread::start() {
 	std::thread t(func_);
 	//设置分离线程
 	t.detach();
+}
+
+
+////////////////////////////////////////////////////////////////
+//Result方法实现
+Result::Result(std::shared_ptr<Task> task, bool isValid) 
+	:isValid_(isValid)
+	, task_(task)
+{
+	task_->setResult(this);
+}
+
+Any Result::get() {//用户调用
+	if (!isValid_) {
+		std::cerr << "task is invalid, get result failed" << std::endl;
+		return "";
+	}
+	else {
+		sem_.wait();//等待任务执行完成
+		return std::move(any_);
+	}
+}
+
+void Result::setVal(Any any) {//线程函数调用
+	//存储task的返回值
+	any_ = std::move(any);
+	sem_.post();//已经获取任务返回值，增加信号量资源
+}
+
+
+
+////////////////////////////////////////////////////////////////
+//Task方法实现
+Task::Task() 
+	:result_(nullptr)
+{ }
+void Task::exec() {
+	//发生多态调用
+	if (result_ != nullptr) {
+		result_->setVal(run());
+	}
+}
+
+void Task::setResult(Result* res) {
+	result_ = res;
 }

@@ -44,7 +44,13 @@ public:
 		if (pd) {
 			return pd->data_;
 		}
-			throw "type is incompatiable!";//抛出异常
+		try {
+			throw "type is Incompatiable!";//抛出异常
+		}
+		catch (const char* msg) {
+			std::cerr << msg << std::endl;
+		}
+		return T();
 	}
 private:
 	class Base {
@@ -84,6 +90,7 @@ public:
 	void post() {
 		std::unique_lock<std::mutex> lock(mtx_);
 		resLimit_++;
+		//linux下condition_varible的析构函数什么也没做，导致这里状态失效，无故阻塞
 		cond_.notify_all ();
 	}
 private:
@@ -166,7 +173,7 @@ public:
 	//析构函数
 	~ThreadPool();
 	//启动线程池
-	void start(size_t initThreadPoolSize = 4);
+	void start(size_t initThreadPoolSize = std::thread::hardware_concurrency());//hardware_concurrency()获取当前系统的CPU核心数
 	//设置线程池模式
 	void setMode(PoolMode mode);
 	//设置线程池任务队列最大阈值

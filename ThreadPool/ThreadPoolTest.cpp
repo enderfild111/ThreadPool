@@ -25,7 +25,7 @@ public:
    //C++17 中引用了Any类型，可以作为任意类型
    Any run() {
       std::cout << "tid:" << std::this_thread::get_id() << "runing..." << std::endl;
-      std::this_thread::sleep_for(std::chrono::seconds(3));
+      std::this_thread::sleep_for(std::chrono::seconds(1));
       ulong sum = 0;
       for (int i = begin_; i <= end_; ++i) {
          sum += i;
@@ -39,6 +39,7 @@ private:
 };
 int main()
 {
+#if 0
     //问题1: ThreadPool析构以后，怎么样把线程池相关的资源全部释放？
     {
        ThreadPool pool;
@@ -72,6 +73,23 @@ int main()
    //Slave 线程负责执行任务，并将结果返回给Master线程
    //Master 线程合并所有Slave线程的结果
    getchar();
+
+#endif
+   //为什么会遇到死锁的问题？(获取任务的线程无法退出)
+
+   {
+	   ThreadPool pool;
+	   pool.setMode(PoolMode::MODE_CACHED);
+	   pool.start(2);
+	   Result res1 = pool.submitTask(std::make_shared<MyTask>(1, 100000000));
+       Result res2 = pool.submitTask(std::make_shared<MyTask>(1, 100000000));
+       pool.submitTask(std::make_shared<MyTask>(100000001, 200000000));
+       pool.submitTask(std::make_shared<MyTask>(100000001, 200000000));
+       pool.submitTask(std::make_shared<MyTask>(100000001, 200000000));
+       pool.submitTask(std::make_shared<MyTask>(100000001, 200000000));
+	   std::cout << "sum:" << res1.get().cast_<ulong>() << std::endl;
+   }
+   std::cout << "main thread finished." << std::endl;
    return 0;
 }
 

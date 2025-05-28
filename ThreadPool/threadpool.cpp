@@ -26,8 +26,8 @@ ThreadPool::ThreadPool()
 ThreadPool::~ThreadPool() {
 	isPoolRunning_ = false;
 	//等待线程池中所有的线程返回，俩种状态:1.阻塞,2.执行
-	notEmpty_.notify_all();
 	std::unique_lock<std::mutex> lock(taskQueMtx_);
+	notEmpty_.notify_all();
 	exitCond_.wait(lock, [&]()->bool { return threads_.empty(); });
 
 }
@@ -124,11 +124,12 @@ void ThreadPool::start(size_t initThreadSize) {
 	}
 }
 //线程函数，线程池所有线程从任务队列里消费任务
-void ThreadPool::ThreadFunc(size_t threadId) {
+void ThreadPool::ThreadFunc(size_t threadId) 
+{
 
 	auto lastTime = std::chrono::high_resolution_clock().now();
 
-	while(isPoolRunning_) 
+	for(;;)
 	{
 		std::shared_ptr<Task> task;
 		{
@@ -141,60 +142,72 @@ void ThreadPool::ThreadFunc(size_t threadId) {
 			//当前时间 - 上次线程执行的时间 > 60s => 回收线程
 				//每一秒返回一次，检查是否需要回收线程
 				//怎么区分超时返回，和有任务待执行返回？
-				while (taskQue_.empty()) {
-					if (poolMode_ == PoolMode::MODE_CACHED) 
+			while (taskQue_.empty()) 
+			{
+				if (!isPoolRunning_) 
+				{
 					{
-						if (std::cv_status::timeout == notEmpty_.wait_for(lock, std::chrono::seconds(1))) 
+						std::lock_guard<std::mutex> lock(threadMtx_);
+						threads_.erase(threadId);//线程池结束，回收线程资源
+						std::cout << std::this_thread::get_id() << " exit! " << threadId << std::endl;
+						exitCond_.notify_all();
+						return;
+					}
+				}
+				if (poolMode_ == PoolMode::MODE_CACHED)
+				{
+					if (std::cv_status::timeout == notEmpty_.wait_for(lock, std::chrono::seconds(1)))
+					{
+						//条件变量超时返回
+						auto nowTime = std::chrono::high_resolution_clock().now();
+						auto dur = std::chrono::duration_cast<std::chrono::seconds>(nowTime - lastTime).count();
+						if (dur >= THREAD_IDLE_TIME
+							&& curThreadSize_ > initThreadSize_)
 						{
-							//条件变量超时返回
-							auto nowTime = std::chrono::high_resolution_clock().now();
-							auto dur = std::chrono::duration_cast<std::chrono::seconds>(nowTime - lastTime).count();
-							if (dur >= THREAD_IDLE_TIME
-								&& curThreadSize_ > initThreadSize_) 
+							//超过最大空闲时间，回收线程
+							//记录线程数量的相关值修改
+							//线程对象从线程列表容器中移除
+							//threadId => thread对象 =>删除
 							{
-								//超过最大空闲时间，回收线程
-								//记录线程数量的相关值修改
-								//线程对象从线程列表容器中移除
-								//threadId => thread对象 =>删除
-									{
-										std::lock_guard<std::mutex> lock(threadMtx_);
-										threads_.erase(threadId);
-									}
-									curThreadSize_--;
-									idelThreadSize_--;
-
-									std::cout << std::this_thread::get_id() << " exit! " << threadId << " idle for " << dur << " seconds, recycle it" << std::endl;
-									return;
+								std::lock_guard<std::mutex> lock(threadMtx_);
+								threads_.erase(threadId);
 							}
-						}
-					}
-					else 
-					{
-						notEmpty_.wait(lock);
-					}
-					//线程池要结束，回收线程资源
-					if (!isPoolRunning_) 
-					{
-						{
-							std::lock_guard<std::mutex> lock(threadMtx_);
-							threads_.erase(threadId);
-							std::cout << std::this_thread::get_id() << " exit! " << threadId <<std::endl;
-							exitCond_.notify_all();
+							curThreadSize_--;
+							idelThreadSize_--;
+
+							std::cout << std::this_thread::get_id() << " exit! " << threadId << " idle for " << dur << " seconds, recycle it" << std::endl;
 							return;
 						}
 					}
 				}
-				idelThreadSize_--;//空闲数量减1
-				std::cout << std::this_thread::get_id() << " 获取任务成功... " << threadId << std::endl;
-				task = taskQue_.front();
-				taskQue_.pop();
-				taskSize_--;
-				//如果依然有任务，通知线程池其他线程可以继续消费任务
-				if (!taskQue_.empty()) {
-					notEmpty_.notify_all();
+				else
+				{
+					notEmpty_.wait(lock);
 				}
-				//取出一个任务，通知可以继续提交任务
-				notFull_.notify_all();
+				//线程池要结束，回收线程资源
+			/*	if (!isPoolRunning_)
+				{
+					{
+						std::lock_guard<std::mutex> lock(threadMtx_);
+						threads_.erase(threadId);
+						std::cout << std::this_thread::get_id() << " exit! " << threadId << std::endl;
+						exitCond_.notify_all();
+						return;
+					}
+				}*/
+			}
+			idelThreadSize_--;//空闲数量减1
+			std::cout << std::this_thread::get_id() << " 获取任务成功... " << threadId << std::endl;
+			task = taskQue_.front();
+			taskQue_.pop();
+			taskSize_--;
+			//如果依然有任务，通知线程池其他线程可以继续消费任务
+			if (!taskQue_.empty()) 
+			{
+				notEmpty_.notify_all();
+			}
+			//取出一个任务，通知可以继续提交任务
+			notFull_.notify_all();
 		}//释放互斥锁
 
 		if (task)
@@ -204,9 +217,6 @@ void ThreadPool::ThreadFunc(size_t threadId) {
 		idelThreadSize_++;//空闲数量加1
 		lastTime = std::chrono::high_resolution_clock().now();//更新上次执行时间
 	}
-	threads_.erase(threadId);//线程池结束，回收线程资源
-	std::cout << std::this_thread::get_id() << " exit! " << threadId << std::endl;
-	exitCond_.notify_all();
 }
 
 
